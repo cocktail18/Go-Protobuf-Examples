@@ -2,31 +2,51 @@ package main
 
 import (
 	"ProtobufTest"
-	"code.google.com/p/goprotobuf/proto"
-	"net"
-	"os"
+	"bytes"
 	"encoding/csv"
 	"flag"
-	"io"
-	"strconv"
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"strconv"
+
+	"github.com/golang/protobuf/proto"
 )
 
 type Headers []string
+
 const CLIENT_NAME = "GoClient"
 const CLIENT_ID = 2
 const CLIENT_DESCRIPTION = "This is a Go Protobuf client!!"
 
 func main() {
-	filename := flag.String("f","CSVValue.csv","Enter the filename to read from")
-	dest := flag.String("d","127.0.0.1:2110","Enter the destnation socket address")
+	filename := flag.String("f", "CSVV.csv", "Enter the filename to read from")
+	dest := flag.String("d", "127.0.0.1:2110", "Enter the destnation socket address")
 	flag.Parse()
 	data, err := retrieveDataFromFile(filename)
 	checkError(err)
-	sendDataToDest(data, dest)
+	fmt.Println("data length, ", len(data))
+	bytesWriter := bytes.Buffer{}
+	bytesWriter.Write(data)
+	sendDataToDest(bytesWriter.Bytes(), dest)
 }
 
-func retrieveDataFromFile(fname *string)([]byte,error ){
+func writeMsg(msg []byte, out io.Writer) (int, error) {
+	bodyLen := len(msg)
+	total := 0
+	n, err := out.Write(proto.EncodeVarint(uint64(bodyLen)))
+	if err != nil {
+		return 0, err
+	}
+	fmt.Println("header", n, "body", bodyLen)
+	total += n
+	n, err = out.Write(msg)
+	total += n
+	return total, err
+}
+
+func retrieveDataFromFile(fname *string) ([]byte, error) {
 	file, err := os.Open(*fname)
 	checkError(err)
 	defer file.Close()
@@ -40,30 +60,30 @@ func retrieveDataFromFile(fname *string)([]byte,error ){
 	ITEMVALUEINDEX := hdrs.getHeaderIndex("itemvalue")
 	ITEMTYPEINDEX := hdrs.getHeaderIndex("itemType")
 
-	ProtoMessage:=  new(ProtobufTest.TestMessage)
+	ProtoMessage := new(ProtobufTest.TestMessage)
 	ProtoMessage.ClientName = proto.String(CLIENT_NAME)
 	ProtoMessage.ClientId = proto.Int32(CLIENT_ID)
 	ProtoMessage.Description = proto.String(CLIENT_DESCRIPTION)
 
 	//loop through the records
-	for{
+	for {
 		record, err := csvreader.Read()
-		if(err!=io.EOF) {
+		if err != io.EOF {
 			checkError(err)
-		}else{
+		} else {
 
 			break
 		}
 		//Populate items
-		testMessageItem:=  new(ProtobufTest.TestMessage_MsgItem)
-		itemid,err := strconv.Atoi(record[ITEMIDINDEX])
+		testMessageItem := new(ProtobufTest.TestMessage_MsgItem)
+		itemid, err := strconv.Atoi(record[ITEMIDINDEX])
 		checkError(err)
 		testMessageItem.Id = proto.Int32(int32(itemid))
 		testMessageItem.ItemName = &record[ITEMNAMEINDEX]
-		itemvalue,err:= strconv.Atoi(record[ITEMVALUEINDEX])
+		itemvalue, err := strconv.Atoi(record[ITEMVALUEINDEX])
 		checkError(err)
 		testMessageItem.ItemValue = proto.Int32(int32(itemvalue))
-		itemtype,err := strconv.Atoi(record[ITEMTYPEINDEX])
+		itemtype, err := strconv.Atoi(record[ITEMTYPEINDEX])
 		checkError(err)
 		iType := ProtobufTest.TestMessage_ItemType(itemtype)
 		testMessageItem.ItemType = &iType
@@ -74,18 +94,28 @@ func retrieveDataFromFile(fname *string)([]byte,error ){
 	}
 
 	//fmt.Println(ProtoMessage.Messageitems)
-	return proto.Marshal(ProtoMessage)
+	buffer, err := proto.Marshal(ProtoMessage)
+	if err != nil {
+		return nil, err
+	}
+	proto.EncodeVarint(uint64(len(buffer)))
+	return buffer, nil
 }
 
-func sendDataToDest(data []byte, dst *string){
-	conn,err := net.Dial("tcp",*dst)
+func sendDataToDest(data []byte, dst *string) {
+	conn, err := net.Dial("tcp", *dst)
 	checkError(err)
-	n,err := conn.Write(data)
+
+	n, err := writeMsg(data, conn)
+	checkError(err)
+	fmt.Println("Sent " + strconv.Itoa(n) + " bytes")
+
+	n, err = writeMsg(data, conn)
 	checkError(err)
 	fmt.Println("Sent " + strconv.Itoa(n) + " bytes")
 }
 
-func checkError(err error){
+func checkError(err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
 		os.Exit(1)
@@ -93,9 +123,9 @@ func checkError(err error){
 }
 
 func (h Headers) getHeaderIndex(headername string) int {
-	if len(headername)>=2{
-		for index, s := range h{
-			if s == headername{
+	if len(headername) >= 2 {
+		for index, s := range h {
+			if s == headername {
 				return index
 			}
 		}
